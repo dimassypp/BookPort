@@ -171,7 +171,7 @@ app.get("/api/categories", async (req, res) => {
 
     const categories = rows.map((row) => row.kategori);
 
-    console.log("Categories fetched:", categories); 
+    console.log("Categories fetched:", categories);
 
     res.json(categories);
   } catch (err) {
@@ -379,7 +379,7 @@ app.get("/api/pesanan/:id/blockchain", auth, async (req, res) => {
 
 // POST: Retry payment for pending orders
 app.post("/api/retry-payment", auth, async (req, res) => {
-  const { order_id } = req.body; 
+  const { order_id } = req.body;
   try {
     const [pesanan] = await db.query(
       "SELECT * FROM pesanan WHERE midtrans_order_id = ? AND user_id = ?",
@@ -409,7 +409,7 @@ app.post("/api/retry-payment", auth, async (req, res) => {
 
     const parameter = {
       transaction_details: {
-        order_id: new_midtrans_order_id, 
+        order_id: new_midtrans_order_id,
         gross_amount: order.total_harga,
       },
       customer_details: {
@@ -437,7 +437,7 @@ app.post("/api/retry-payment", auth, async (req, res) => {
     const snapToken = await snap.createTransactionToken(parameter);
     res.json({
       snapToken,
-      order_id: new_midtrans_order_id, 
+      order_id: new_midtrans_order_id,
     });
   } catch (err) {
     console.error("[RETRY PAYMENT ERROR]", err);
@@ -553,6 +553,33 @@ app.post("/api/checkout", auth, async (req, res) => {
 // POST: Midtrans webhook
 app.post("/api/midtrans-notification", async (req, res) => {
   const notificationJson = req.body;
+  try {
+    const rawJson = JSON.stringify(notificationJson);
+    const amount = notificationJson.gross_amount
+      ? parseFloat(notificationJson.gross_amount)
+      : 0;
+
+    await db.query(
+      `INSERT INTO webhook_logs 
+        (order_id, transaction_status, fraud_status, payment_type, gross_amount, raw_notification, processed_at) 
+       VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        notificationJson.order_id || null,
+        notificationJson.transaction_status || null,
+        notificationJson.fraud_status || null,
+        notificationJson.payment_type || null,
+        amount,
+        rawJson,
+      ]
+    );
+    console.log(
+      `[WEBHOOK LOG] Log tersimpan untuk Order ID: ${notificationJson.order_id}`
+    );
+  } catch (logErr) {
+    // Hanya console error, jangan res.status(500) agar proses utama tetap jalan
+    console.error("[WEBHOOK LOG ERROR] Gagal menyimpan log:", logErr.message);
+  }
+
   try {
     const statusResponse = await snap.transaction.notification(
       notificationJson
@@ -758,10 +785,14 @@ app.delete("/api/admin/buku/:id", adminAuth, async (req, res) => {
   } catch (err) {
     console.error("Admin delete book error:", err);
 
-    if (err.code === 'ER_ROW_IS_REFERENCED_2' || err.code === 'ER_ROW_IS_REFERENCED') {
-        return res.status(400).json({ 
-            message: "Gagal hapus: Buku ini ada dalam riwayat pesanan orang lain. Mohon ubah stok menjadi 0 saja untuk menyembunyikannya." 
-        });
+    if (
+      err.code === "ER_ROW_IS_REFERENCED_2" ||
+      err.code === "ER_ROW_IS_REFERENCED"
+    ) {
+      return res.status(400).json({
+        message:
+          "Gagal hapus: Buku ini ada dalam riwayat pesanan orang lain. Mohon ubah stok menjadi 0 saja untuk menyembunyikannya.",
+      });
     }
 
     res.status(500).json({ message: "Server error: " + err.message });
@@ -1019,8 +1050,6 @@ app.listen(port, () => {
     }`
   );
   console.log(
-    `Blockchain: ${
-      process.env.CONTRACT_ADDRESS ? "✓ Configured" : "✗ Missing"
-    }`
+    `Blockchain: ${process.env.CONTRACT_ADDRESS ? "✓ Configured" : "✗ Missing"}`
   );
 });

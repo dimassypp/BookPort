@@ -386,7 +386,7 @@ const AdminOrderDetailPage = () => {
               border: '1px solid #4caf50'
             }}>
               <div style={{ fontSize: '14px', fontWeight: '600', color: '#2e7d32', marginBottom: '0.5rem' }}>
-                ✅ Blockchain Verified
+                Blockchain Verified
               </div>
               <div style={{ fontSize: '12px', color: '#666', marginBottom: '0.5rem' }}>
                 Transaction Hash:

@@ -121,7 +121,7 @@ app.get("/api/buku", async (req, res) => {
 
     // Search by query (title or author)
     if (q) {
-      sql += " AND (j udul LIKE ? OR penulis LIKE ?)";
+      sql += " AND (judul LIKE ? OR penulis LIKE ?)";
       params.push(`%${q}%`, `%${q}%`);
     }
 
@@ -410,7 +410,7 @@ app.post("/api/retry-payment", auth, async (req, res) => {
     const parameter = {
       transaction_details: {
         order_id: new_midtrans_order_id,
-        gross_amount: order.total_harga,
+        gross_amount: parseInt(order.total_harga),
       },
       customer_details: {
         first_name: alamat_pengiriman.first_name || req.user.nama,
@@ -553,32 +553,32 @@ app.post("/api/checkout", auth, async (req, res) => {
 // POST: Midtrans webhook
 app.post("/api/midtrans-notification", async (req, res) => {
   const notificationJson = req.body;
-  try {
-    const rawJson = JSON.stringify(notificationJson);
-    const amount = notificationJson.gross_amount
-      ? parseFloat(notificationJson.gross_amount)
-      : 0;
+  // try {
+  //   const rawJson = JSON.stringify(notificationJson);
+  //   const amount = notificationJson.gross_amount
+  //     ? parseFloat(notificationJson.gross_amount)
+  //     : 0;
 
-    await db.query(
-      `INSERT INTO webhook_logs 
-        (order_id, transaction_status, fraud_status, payment_type, gross_amount, raw_notification, processed_at) 
-       VALUES (?, ?, ?, ?, ?, ?, NOW())`,
-      [
-        notificationJson.order_id || null,
-        notificationJson.transaction_status || null,
-        notificationJson.fraud_status || null,
-        notificationJson.payment_type || null,
-        amount,
-        rawJson,
-      ]
-    );
-    console.log(
-      `[WEBHOOK LOG] Log tersimpan untuk Order ID: ${notificationJson.order_id}`
-    );
-  } catch (logErr) {
-    // Hanya console error, jangan res.status(500) agar proses utama tetap jalan
-    console.error("[WEBHOOK LOG ERROR] Gagal menyimpan log:", logErr.message);
-  }
+  //   await db.query(
+  //     `INSERT INTO webhook_logs 
+  //       (order_id, transaction_status, fraud_status, payment_type, gross_amount, raw_notification, processed_at) 
+  //      VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+  //     [
+  //       notificationJson.order_id || null,
+  //       notificationJson.transaction_status || null,
+  //       notificationJson.fraud_status || null,
+  //       notificationJson.payment_type || null,
+  //       amount,
+  //       rawJson,
+  //     ]
+  //   );
+  //   console.log(
+  //     `[WEBHOOK LOG] Log tersimpan untuk Order ID: ${notificationJson.order_id}`
+  //   );
+  // } catch (logErr) {
+  //   // Hanya console error, jangan res.status(500) agar proses utama tetap jalan
+  //   console.error("[WEBHOOK LOG ERROR] Gagal menyimpan log:", logErr.message);
+  // }
 
   try {
     const statusResponse = await snap.transaction.notification(
@@ -886,17 +886,16 @@ app.put("/api/admin/pesanan/:id/status", adminAuth, async (req, res) => {
   const { id } = req.params;
 
   const allowedStatuses = [
-    "waiting payment", // Initial state
-    "processing", // Auto from webhook
-    "shipped", // Admin manually set
-    "completed", // Admin manually set
-    "cancelled", // Can be set anytime
+    "waiting payment",
+    "processing", 
+    "shipped",
+    "completed",
+    "cancelled",
   ];
 
   if (!status_pesanan || !allowedStatuses.includes(status_pesanan)) {
     return res.status(400).json({
-      message:
-        "Status tidak valid. Pilih: waiting payment, processing, paid, completed, cancelled",
+      message: "Status tidak valid. Pilih: waiting payment, processing, shipped, completed, cancelled",
     });
   }
 
@@ -908,23 +907,70 @@ app.put("/api/admin/pesanan/:id/status", adminAuth, async (req, res) => {
     }
 
     const currentOrder = orders[0];
+    const currentStatus = currentOrder.status_pesanan.replace("_", " ");
 
-    // Validate transitions (optional)
+    // Validasi transisi status
     const validTransitions = {
-      "waiting payment": ["cancelled"], // Only cancel (processing is auto)
-      processing: ["shipped", "cancelled"], // Admin ships or cancels
-      shipped: ["completed", "cancelled"], // Delivered or cancelled
+      "waiting payment": ["cancelled"], // Hanya bisa cancel sebelum bayar
+      processing: ["shipped", "cancelled"], // Bisa cancel jika belum dikirim
+      shipped: ["completed"], // Tidak bisa cancel jika sudah dikirim
       completed: [], // Final state
       cancelled: [], // Final state
     };
 
-    const currentStatus = currentOrder.status_pesanan.replace("_", " ");
     const allowedNext = validTransitions[currentStatus];
 
     if (allowedNext && !allowedNext.includes(status_pesanan)) {
       return res.status(400).json({
         message: `Tidak bisa mengubah status dari "${currentStatus}" ke "${status_pesanan}"`,
       });
+    }
+
+    if (status_pesanan === "cancelled") {
+      // Kembalikan stok buku
+      const [details] = await db.query(
+        `SELECT d.buku_id, d.jumlah 
+         FROM detail_pesanan d
+         WHERE d.pesanan_id = ?`,
+        [id]
+      );
+      
+      for (const item of details) {
+        await db.query("UPDATE buku SET stok = stok + ? WHERE id = ?", [
+          item.jumlah,
+          item.buku_id,
+        ]);
+      }
+
+      if (currentOrder.status_pembayaran === "paid") {
+        // Ubah status pembayaran menjadi "refunded"
+        await db.query(
+          `UPDATE pesanan 
+           SET status_pesanan = ?, 
+               status_pembayaran = 'refunded',
+               updated_at = NOW() 
+           WHERE id = ?`,
+          [status_pesanan, id]
+        );
+        
+        // Log untuk admin bahwa perlu manual refund via Midtrans
+        console.log(`[REFUND NEEDED] Order ${currentOrder.midtrans_order_id} - Rp ${currentOrder.total_harga}`);
+        
+        const [updatedOrders] = await db.query(
+          `SELECT p.*, u.nama AS user_nama, u.email AS user_email
+           FROM pesanan p
+           JOIN users u ON p.user_id = u.id
+           WHERE p.id = ?`,
+          [id]
+        );
+
+        return res.json({
+          message: "Pesanan dibatalkan. Refund perlu diproses manual via Midtrans Dashboard.",
+          order: updatedOrders[0],
+          refund_required: true,
+          refund_amount: currentOrder.total_harga
+        });
+      }
     }
 
     await db.query(
@@ -946,6 +992,28 @@ app.put("/api/admin/pesanan/:id/status", adminAuth, async (req, res) => {
     });
   } catch (err) {
     console.error("Error updating status:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// GET: Revenue statistics (admin)
+app.get("/api/admin/revenue", adminAuth, async (req, res) => {
+  try {
+    const [result] = await db.query(`
+      SELECT 
+        SUM(total_harga) as total_revenue,
+        COUNT(*) as completed_orders
+      FROM pesanan 
+      WHERE status_pembayaran = 'paid' 
+      AND status_pesanan NOT IN ('cancelled')
+    `);
+    
+    res.json({
+      total_revenue: result[0].total_revenue || 0,
+      completed_orders: result[0].completed_orders || 0
+    });
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -984,6 +1052,63 @@ app.post("/api/admin/retry-blockchain/:id", adminAuth, async (req, res) => {
   } catch (err) {
     console.error("[ADMIN RETRY ERROR]", err);
     res.status(500).json({ message: err.message });
+  }
+});
+
+// API TEST MIDTRANS
+app.post("/api/test-midtrans", auth, async (req, res) => {
+  try {
+    const testOrderId = `TEST-${Date.now()}`;
+    
+    const parameter = {
+      transaction_details: {
+        order_id: testOrderId,
+        gross_amount: 100000 // Test dengan nominal fixed
+      },
+      customer_details: {
+        first_name: "Test User",
+        last_name: "BookPort",
+        email: "test@bookport.com",
+        phone: "08123456789"
+      },
+      callbacks: {
+        finish: `${process.env.FRONTEND_URL || "http://localhost:3000"}/riwayat`,
+        unfinish: `${process.env.FRONTEND_URL || "http://localhost:3000"}/checkout`,
+        error: `${process.env.FRONTEND_URL || "http://localhost:3000"}/checkout`,
+      }
+    };
+
+    console.log("=== MIDTRANS TEST REQUEST ===");
+    console.log("Server Key:", process.env.MIDTRANS_SERVER_KEY?.substring(0, 20) + "...");
+    console.log("Parameter:", JSON.stringify(parameter, null, 2));
+    console.log("============================");
+
+    const snapToken = await snap.createTransactionToken(parameter);
+    
+    console.log("SUCCESS - Token:", snapToken.substring(0, 30) + "...");
+    
+    res.json({ 
+      success: true, 
+      snapToken,
+      message: "Midtrans working properly",
+      testOrderId 
+    });
+  } catch (err) {
+    console.error("MIDTRANS TEST FAILED:");
+    console.error("Error Message:", err.message);
+    console.error("Error Code:", err.code);
+    console.error("Status Code:", err.statusCode);
+    console.error("API Response:", err.ApiResponse);
+    console.error("Full Error:", JSON.stringify(err, null, 2));
+    
+    res.status(500).json({ 
+      success: false,
+      error: err.message,
+      code: err.code,
+      statusCode: err.statusCode,
+      apiResponse: err.ApiResponse,
+      hint: "Check console for full error details"
+    });
   }
 });
 
@@ -1034,6 +1159,59 @@ cron.schedule("0 * * * *", async () => {
     console.error("[CRON ERROR]", err);
   }
 });
+
+
+// // SIMULASI AUTO PAY KARENA MIDTRANS ERROR
+// app.post("/api/simulate-payment", auth, async (req, res) => {
+//   const { order_id } = req.body;
+  
+//   try {
+//     console.log(`[AUTO-PAY] Simulating success for order: ${order_id}`);
+
+//     // Paksa Update Status di Database menjadi PAID
+//     await db.query(
+//       `UPDATE pesanan 
+//        SET status_pembayaran = 'paid', 
+//            status_pesanan = 'processing', 
+//            updated_at = NOW() 
+//        WHERE midtrans_order_id = ?`,
+//       [order_id]
+//     );
+
+//     // Logika tambahan: Kurangi Stok & Catat Blockchain (Manual karena tidak lewat webhook)
+//     const [pesanan] = await db.query(
+//         "SELECT id, user_id, total_harga FROM pesanan WHERE midtrans_order_id = ?", 
+//         [order_id]
+//     );
+
+//     if (pesanan.length > 0) {
+//         const p = pesanan[0];
+        
+//         // a. Kurangi Stok Buku
+//         const [details] = await db.query(
+//             "SELECT buku_id, jumlah FROM detail_pesanan WHERE pesanan_id = ?", 
+//             [p.id]
+//         );
+//         for (const item of details) {
+//             await db.query("UPDATE buku SET stok = stok - ? WHERE id = ?", [item.jumlah, item.buku_id]);
+//         }
+
+//         bookPortContract.addReceipt(p.id, p.user_id.toString(), p.total_harga)
+//             .then(tx => tx.wait())
+//             .then(receipt => {
+//                 console.log("[AUTO-PAY] Blockchain recorded:", receipt.transactionHash);
+//                 db.query("UPDATE pesanan SET blockchain_tx_hash = ? WHERE id = ?", [receipt.transactionHash, p.id]);
+//             })
+//             .catch(err => console.error("[AUTO-PAY BLOCKCHAIN SKIP] Mining failed or pending:", err.message));
+//     }
+
+//     res.json({ message: "Payment Auto-Completed Successfully" });
+
+//   } catch (err) {
+//     console.error("[AUTO-PAY ERROR]", err);
+//     res.status(500).json({ message: "Simulasi Gagal" });
+//   }
+// });
 
 // ===================================
 // START SERVER

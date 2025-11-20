@@ -22,7 +22,6 @@ import AdminBooksPage from "./pages/AdminBooksPage";
 import AdminPage from "./pages/AdminPage"; // Tambah Buku
 import AdminTransactionsPage from "./pages/AdminTransactionsPage";
 import AdminTransactionDetailPage from "./pages/AdminTransactionDetailPage";
-import AdminOrderDetailPage from "./pages/AdminOrderDetailPage";
 
 // Komponen
 import Navbar from "./components/Navbar";
@@ -125,14 +124,6 @@ function AppContent() {
             element={
               <AdminRoute>
                 <AdminTransactionDetailPage />
-              </AdminRoute>
-            }
-          />
-          <Route
-            path="/admin/orders/:id"
-            element={
-              <AdminRoute>
-                <AdminOrderDetailPage />
               </AdminRoute>
             }
           />

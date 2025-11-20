@@ -453,18 +453,24 @@ app.post("/api/retry-payment", auth, async (req, res) => {
 app.post("/api/checkout", auth, async (req, res) => {
   const { alamat_pengiriman, cart_items, ongkir } = req.body;
   const userId = req.user.id;
+  
   if (!cart_items || cart_items.length === 0) {
     return res.status(400).json({ message: "Keranjang Anda kosong" });
   }
+  
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction();
+    
+    // Validasi buku
     const ids = cart_items.map((item) => item.buku_id);
     const [bukuDb] = await connection.query(
       `SELECT id, judul, harga, stok FROM buku WHERE id IN (${ids.join(",")})`
     );
+    
     let total_harga = ongkir || 0;
     let detailPesananData = [];
+    
     for (const item of cart_items) {
       const buku = bukuDb.find((b) => b.id === item.buku_id);
       if (!buku) {
@@ -482,12 +488,17 @@ app.post("/api/checkout", auth, async (req, res) => {
         jumlah: item.jumlah,
         harga_saat_beli: buku.harga,
       });
+      
+      // Kurangi stok
       await connection.query("UPDATE buku SET stok = stok - ? WHERE id = ?", [
         item.jumlah,
         item.buku_id,
       ]);
     }
+    
     const midtrans_order_id = `BOOKPORT-${userId}-${Date.now()}`;
+    
+    // Insert pesanan
     const [pesananResult] = await connection.query(
       `INSERT INTO pesanan 
         (user_id, total_harga, status_pembayaran, status_pesanan, alamat_pengiriman, ongkir, midtrans_order_id) 
@@ -500,7 +511,17 @@ app.post("/api/checkout", auth, async (req, res) => {
         midtrans_order_id,
       ]
     );
+    
     const pesananId = pesananResult.insertId;
+    
+    // Generate user-friendly order number
+    const order_number = `BP-${String(pesananId).padStart(5, '0')}`;
+    await connection.query(
+      "UPDATE pesanan SET order_number = ? WHERE id = ?",
+      [order_number, pesananId]
+    );
+    
+    // Insert detail pesanan
     for (const detail of detailPesananData) {
       await connection.query(
         "INSERT INTO detail_pesanan (pesanan_id, buku_id, jumlah, harga_saat_beli) VALUES (?, ?, ?, ?)",
@@ -508,6 +529,7 @@ app.post("/api/checkout", auth, async (req, res) => {
       );
     }
 
+    // Midtrans transaction
     const parameter = {
       transaction_details: {
         order_id: midtrans_order_id,
@@ -533,10 +555,13 @@ app.post("/api/checkout", auth, async (req, res) => {
     };
 
     const snapToken = await snap.createTransactionToken(parameter);
+    
     await connection.commit();
+    
     res.status(200).json({
       snapToken,
       order_id: midtrans_order_id,
+      order_number: order_number, 
       pesanan_id: pesananId,
     });
   } catch (err) {

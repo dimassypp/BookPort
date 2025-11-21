@@ -34,10 +34,8 @@ const DetailRiwayatPage = () => {
     if (!document.querySelector(`script[src="${snapScript}"]`)) {
       document.head.appendChild(script);
     }
-
   }, [id, token, authLoading]);
 
-  
   const fetchDetail = async () => {
     try {
       const res = await axios.get(`http://localhost:5000/api/pesanan/${id}`, {
@@ -101,14 +99,14 @@ const DetailRiwayatPage = () => {
       {
         key: "waiting payment",
         label: "Purchased",
-        icon: "🛒",
+        icon: "/images/purchased_icon.png",
         date: createdDate, // Always show created date
         active: true,
       },
       {
         key: "processing",
         label: "Processing",
-        icon: "🔄",
+        icon: "/images/processing_icon.png",
         date:
           paymentStatus === "paid" &&
           ["processing", "shipped", "completed"].includes(status)
@@ -121,14 +119,14 @@ const DetailRiwayatPage = () => {
       {
         key: "shipped",
         label: "Delivering",
-        icon: "🚚",
+        icon: "/images/delivering_icon.png",
         date: ["shipped", "completed"].includes(status) ? updatedDate : null,
         active: ["shipped", "completed"].includes(status),
       },
       {
         key: "completed",
         label: "Completed",
-        icon: "✓",
+        icon: "/images/completed_icon.png",
         date: status === "completed" ? updatedDate : null,
         active: status === "completed",
       },
@@ -213,7 +211,7 @@ const DetailRiwayatPage = () => {
                 marginBottom: "0.25rem",
               }}
             >
-              Order ID #{pesanan.id}
+              Order {pesanan.order_number || `#${pesanan.id}`}
             </h2>
             <p style={{ fontSize: "14px", color: "#666" }}>
               Arrived: {formatDate(pesanan.created_at)}
@@ -298,7 +296,18 @@ const DetailRiwayatPage = () => {
                     transition: "all 0.3s",
                   }}
                 >
-                  {step.icon}
+                  <img
+                    src={step.icon}
+                    alt={step.label}
+                    style={{
+                      width: "40%",
+                      height: "40%",
+                      objectFit: "contain",
+                      filter: step.active
+                        ? "brightness(0) invert(1)"
+                        : "grayscale(100%) opacity(0.5)",
+                    }}
+                  />
                 </div>
                 <div
                   style={{
@@ -430,7 +439,7 @@ const DetailRiwayatPage = () => {
             </div>
           ))}
 
-          {/* Total */}
+{/* Total */}
           <div
             style={{
               marginTop: "2rem",
@@ -484,6 +493,35 @@ const DetailRiwayatPage = () => {
               </button>
             )}
           </div>
+
+          {/* Payment Method Card */}
+          {pesanan.payment_method && (
+            <div
+              style={{
+                marginTop: "2rem",
+                padding: "1rem 1.5rem",
+                background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                borderRadius: "8px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                color: "#fff",
+              }}
+            >
+              <div
+                style={{ display: "flex", alignItems: "center", gap: "1rem" }}
+              >
+                <div>
+                  <div style={{ fontSize: "12px", opacity: 0.9 }}>
+                    Paid via
+                  </div>
+                  <div style={{ fontSize: "16px", fontWeight: "600" }}>
+                    {pesanan.payment_method}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Rating Section */}
           {pesanan.status_pesanan === "completed" && (
@@ -564,7 +602,6 @@ const DetailRiwayatPage = () => {
                   marginBottom: "0.5rem",
                 }}
               >
-                <span style={{ fontSize: "24px" }}>✅</span>
                 <h4
                   style={{
                     fontSize: "16px",
@@ -598,8 +635,8 @@ const DetailRiwayatPage = () => {
               >
                 {pesanan.blockchain_tx_hash}
               </code>
-              <a
-                href={`https://sepolia.etherscan.io/tx/${pesanan.blockchain_tx_hash}`}
+              
+                <a href={`https://sepolia.etherscan.io/tx/${pesanan.blockchain_tx_hash}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{

@@ -8,7 +8,6 @@ const RiwayatPage = () => {
   const { token, loading: authLoading } = useContext(AuthContext);
   const { clearCart } = useContext(CartContext);
   const [pesananList, setPesananList] = useState([]);
-  // const [pesananDetails, setPesananDetails] = useState({}); // Store details
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all");
 
@@ -32,35 +31,6 @@ const RiwayatPage = () => {
       clearCart();
     }
   }, [pesananList]);
-
-  // FETCH RIWAYAT LAMA
-  // const fetchRiwayat = async () => {
-  //   try {
-  //     const res = await axios.get('http://localhost:5000/api/pesanan', {
-  //       headers: { Authorization: `Bearer ${token}` }
-  //     });
-  //     setPesananList(res.data);
-
-  //     // Fetch details for each order
-  //     res.data.forEach(async (pesanan) => {
-  //       try {
-  //         const detailRes = await axios.get(`http://localhost:5000/api/pesanan/${pesanan.id}`, {
-  //           headers: { Authorization: `Bearer ${token}` }
-  //         });
-  //         setPesananDetails(prev => ({
-  //           ...prev,
-  //           [pesanan.id]: detailRes.data.detail
-  //         }));
-  //       } catch (err) {
-  //         console.error(`Error fetching detail for order ${pesanan.id}:`, err);
-  //       }
-  //     });
-  //   } catch (err) {
-  //     console.error('Error fetching orders:', err);
-  //   } finally {
-  //     setLoading(false);
-  //   }
-  // };
 
   const fetchRiwayat = async () => {
     setLoading(true); 
@@ -94,6 +64,9 @@ const RiwayatPage = () => {
     if (statusPembayaran === "failed" || statusPesanan === "cancelled") {
       return { text: "Cancelled", color: "#dc3545", bgColor: "#f8d7da" };
     }
+    if (statusPembayaran === "refunded") {
+      return { text: "Refunded", color: "#6c757d", bgColor: "#e9ecef" };
+    }
     return { text: statusPesanan, color: "#6c757d", bgColor: "#e9ecef" };
   };
 
@@ -107,14 +80,40 @@ const RiwayatPage = () => {
     if (filter === "completed") return p.status_pesanan === "completed";
     if (filter === "cancelled")
       return (
-        p.status_pembayaran === "failed" || p.status_pesanan === "cancelled"
+        p.status_pembayaran === "failed" || 
+        p.status_pesanan === "cancelled" ||
+        p.status_pembayaran === "refunded"
       );
     return true;
   });
 
   if (loading) {
     return (
-      <div style={{ textAlign: "center", padding: "4rem" }}>Loading...</div>
+      <div style={{ 
+        display: 'flex', 
+        justifyContent: 'center', 
+        alignItems: 'center', 
+        minHeight: '100vh' 
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{
+            border: '4px solid #f3f3f3',
+            borderTop: '4px solid #0066cc',
+            borderRadius: '50%',
+            width: '50px',
+            height: '50px',
+            animation: 'spin 1s linear infinite',
+            margin: '0 auto 1rem'
+          }} />
+          <p style={{ color: '#666' }}>Loading orders...</p>
+        </div>
+        <style>{`
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+        `}</style>
+      </div>
     );
   }
 
@@ -167,7 +166,10 @@ const RiwayatPage = () => {
                   alignItems: "center",
                   gap: "0.75rem",
                   color: "#666",
+                  transition: "background-color 0.2s",
                 }}
+                onMouseOver={(e) => e.currentTarget.style.backgroundColor = "#f0f0f0"}
+                onMouseOut={(e) => e.currentTarget.style.backgroundColor = "transparent"}
               >
                 <svg
                   width="20"
@@ -194,6 +196,7 @@ const RiwayatPage = () => {
                 gap: "0.75rem",
                 color: "#0066cc",
                 fontWeight: "600",
+                boxShadow: "0 2px 8px rgba(0,0,0,0.05)",
               }}
             >
               <svg
@@ -244,6 +247,7 @@ const RiwayatPage = () => {
                     border: "none",
                     borderRadius: "6px",
                     fontSize: "14px",
+                    fontWeight: filter === tab.key ? "600" : "400",
                     cursor: "pointer",
                     transition: "all 0.2s",
                   }}
@@ -262,9 +266,16 @@ const RiwayatPage = () => {
                   borderRadius: "12px",
                   textAlign: "center",
                   color: "#999",
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.05)",
                 }}
               >
-                Tidak ada pesanan
+                <div style={{ fontSize: "48px", marginBottom: "1rem" }}>📭</div>
+                <div style={{ fontSize: "18px", fontWeight: "500", marginBottom: "0.5rem" }}>
+                  Tidak ada pesanan
+                </div>
+                <div style={{ fontSize: "14px" }}>
+                  Filter "{filter}" tidak memiliki pesanan
+                </div>
               </div>
             ) : (
               filteredOrders.map((pesanan) => (
@@ -276,7 +287,10 @@ const RiwayatPage = () => {
                     padding: "1.5rem",
                     marginBottom: "1rem",
                     boxShadow: "0 2px 8px rgba(0,0,0,0.05)",
+                    transition: "box-shadow 0.2s",
                   }}
+                  onMouseOver={(e) => e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.1)"}
+                  onMouseOut={(e) => e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.05)"}
                 >
                   <div
                     style={{
@@ -289,17 +303,18 @@ const RiwayatPage = () => {
                     }}
                   >
                     <div>
+                      {/* ✅ Tampilkan order_number */}
                       <div
                         style={{
-                          fontSize: "14px",
-                          color: "#666",
+                          fontSize: "16px",
+                          fontWeight: "600",
+                          color: "#333",
                           marginBottom: "0.25rem",
                         }}
                       >
-                        Order ID #{pesanan.id}
+                        Order {pesanan.order_number || `#${pesanan.id}`}
                       </div>
                       <div style={{ fontSize: "13px", color: "#999" }}>
-                        Arrived:{" "}
                         {new Date(pesanan.created_at).toLocaleDateString(
                           "en-US",
                           {
@@ -334,7 +349,7 @@ const RiwayatPage = () => {
                     </div>
                   </div>
 
-                  {/* Order Items Preview (first 2 items) */}
+                  {/* Order Items Preview */}
                   <div style={{ marginBottom: "1rem" }}>
                     <div
                       style={{
@@ -343,7 +358,6 @@ const RiwayatPage = () => {
                         gap: "1rem",
                       }}
                     >
-                      {/* Tampilkan gambar dari data baru */}
                       {pesanan.item_gambar ? (
                         <img
                           src={`http://localhost:5000${pesanan.item_gambar}`}
@@ -366,7 +380,6 @@ const RiwayatPage = () => {
                         />
                       )}
 
-                      {/* Tampilkan info dari data baru */}
                       <div>
                         <div
                           style={{
@@ -378,7 +391,6 @@ const RiwayatPage = () => {
                           {pesanan.item_judul}
                         </div>
                         <div style={{ fontSize: "13px", color: "#666" }}>
-                          {/* Tampilkan jika ada lebih dari 1 item */}
                           {pesanan.total_item > 1 && (
                             <span>
                               (+ {pesanan.total_item - 1} item lainnya)
@@ -399,9 +411,9 @@ const RiwayatPage = () => {
                     }}
                   >
                     <div style={{ fontSize: "16px", fontWeight: "600" }}>
-                      Total: Rp. {pesanan.total_harga.toLocaleString("id-ID")}
+                      Total: Rp {pesanan.total_harga.toLocaleString("id-ID")}
                     </div>
-                    <Link to={`/riwayat/${pesanan.id}`}>
+                    <Link to={`/riwayat/${pesanan.id}`} style={{ textDecoration: "none" }}>
                       <button
                         style={{
                           padding: "0.5rem 1.5rem",
@@ -410,8 +422,12 @@ const RiwayatPage = () => {
                           border: "none",
                           borderRadius: "6px",
                           fontSize: "14px",
+                          fontWeight: "500",
                           cursor: "pointer",
+                          transition: "background-color 0.2s",
                         }}
+                        onMouseOver={(e) => e.target.style.backgroundColor = "#000"}
+                        onMouseOut={(e) => e.target.style.backgroundColor = "#1a1a1a"}
                       >
                         Details
                       </button>

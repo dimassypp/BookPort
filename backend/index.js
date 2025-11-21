@@ -304,7 +304,7 @@ app.get("/api/pesanan", auth, async (req, res) => {
   try {
     const [pesanan] = await db.query(
       `SELECT 
-         p.id, p.created_at, p.total_harga, p.status_pembayaran, p.status_pesanan, p.midtrans_order_id,
+         p.id, p.order_number, p.created_at, p.total_harga, p.status_pembayaran, p.status_pesanan, p.midtrans_order_id,
          (SELECT dp.jumlah FROM detail_pesanan dp WHERE dp.pesanan_id = p.id LIMIT 1) as item_jumlah,
          (SELECT b.judul FROM detail_pesanan dp JOIN buku b ON dp.buku_id = b.id WHERE dp.pesanan_id = p.id LIMIT 1) as item_judul,
          (SELECT b.gambar_url FROM detail_pesanan dp JOIN buku b ON dp.buku_id = b.id WHERE dp.pesanan_id = p.id LIMIT 1) as item_gambar,
@@ -328,14 +328,14 @@ app.get("/api/pesanan/:id", auth, async (req, res) => {
   try {
     const { id } = req.params;
     const [pesanan] = await db.query(
-      "SELECT * FROM pesanan WHERE id = ? AND user_id = ?",
+      "SELECT *, order_number, payment_method FROM pesanan WHERE id = ? AND user_id = ?",
       [id, req.user.id]
     );
     if (pesanan.length === 0) {
       return res.status(404).json({ message: "Pesanan tidak ditemukan" });
     }
     const [detail] = await db.query(
-      "SELECT d.*, b.judul, b.gambar_url FROM detail_pesanan d JOIN buku b ON d.buku_id = b.id WHERE d.pesanan_id = ?",
+      "SELECT d.*, b.judul, b.gambar_url, b.penulis FROM detail_pesanan d JOIN buku b ON d.buku_id = b.id WHERE d.pesanan_id = ?",
       [id]
     );
     res.json({ pesanan: pesanan[0], detail: detail });
@@ -606,15 +606,15 @@ app.post("/api/midtrans-notification", async (req, res) => {
   // }
 
   try {
-    const statusResponse = await snap.transaction.notification(
-      notificationJson
-    );
+    const statusResponse = await snap.transaction.notification(notificationJson);
     const order_id = statusResponse.order_id;
     const transaction_status = statusResponse.transaction_status;
     const fraud_status = statusResponse.fraud_status;
     const status_code = statusResponse.status_code;
     const gross_amount = statusResponse.gross_amount;
+    const payment_type = statusResponse.payment_type;
 
+    // Signature validation
     const signatureKey = statusResponse.signature_key;
     const calculatedSignature = crypto
       .createHash("sha512")
@@ -622,6 +622,7 @@ app.post("/api/midtrans-notification", async (req, res) => {
         `${order_id}${status_code}${gross_amount}${process.env.MIDTRANS_SERVER_KEY}`
       )
       .digest("hex");
+    
     if (signatureKey !== calculatedSignature) {
       console.error("[WEBHOOK] Invalid signature!");
       return res.status(403).send("Invalid signature");
@@ -635,6 +636,26 @@ app.post("/api/midtrans-notification", async (req, res) => {
       return res.status(200).send("Already processed");
     }
 
+    // Mapping payment_type ke format yang lebih readable
+    const paymentMethodMap = {
+      'credit_card': 'Credit Card',
+      'bank_transfer': 'Bank Transfer',
+      'echannel': 'Mandiri Bill',
+      'bca_va': 'BCA Virtual Account',
+      'bni_va': 'BNI Virtual Account',
+      'bri_va': 'BRI Virtual Account',
+      'permata_va': 'Permata Virtual Account',
+      'other_va': 'Virtual Account',
+      'gopay': 'GoPay',
+      'shopeepay': 'ShopeePay',
+      'qris': 'QRIS',
+      'indomaret': 'Indomaret',
+      'alfamart': 'Alfamart',
+      'akulaku': 'Akulaku',
+    };
+
+    const payment_method = paymentMethodMap[payment_type] || payment_type;
+
     // Payment success
     if (transaction_status == "capture" || transaction_status == "settlement") {
       if (fraud_status == "accept" || transaction_status == "settlement") {
@@ -642,9 +663,10 @@ app.post("/api/midtrans-notification", async (req, res) => {
           `UPDATE pesanan 
            SET status_pembayaran = 'paid', 
                status_pesanan = 'processing',
+               payment_method = ?, 
                updated_at = NOW() 
            WHERE midtrans_order_id = ?`,
-          [order_id]
+          [payment_method, order_id]
         );
 
         const [pesanan] = await db.query(
@@ -676,6 +698,13 @@ app.post("/api/midtrans-notification", async (req, res) => {
     }
     // Payment pending
     else if (transaction_status == "pending") {
+      // Update payment method meskipun pending
+      await db.query(
+        `UPDATE pesanan 
+         SET payment_method = ?
+         WHERE midtrans_order_id = ?`,
+        [payment_method, order_id]
+      );
     }
     // Payment failed
     else if (
@@ -687,9 +716,10 @@ app.post("/api/midtrans-notification", async (req, res) => {
         `UPDATE pesanan 
          SET status_pembayaran = 'failed', 
              status_pesanan = 'cancelled',
+             payment_method = ?,
              updated_at = NOW()
          WHERE midtrans_order_id = ?`,
-        [order_id]
+        [payment_method, order_id]
       );
 
       // Restore stock

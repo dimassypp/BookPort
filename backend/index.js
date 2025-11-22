@@ -12,12 +12,78 @@ const path = require("path");
 const crypto = require("crypto");
 const fs = require("fs");
 const cron = require("node-cron");
+const http = require("http");
+const socketIo = require("socket.io");
 
 // ===================================
 // INISIALISASI APLIKASI
 // ===================================
 const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"],
+  },
+});
+
 const port = process.env.PORT || 5000;
+
+// ===================================
+// TRACKING HELPERS 
+// ===================================
+
+// Simpan data tracking aktif di memori
+const activeDeliveries = new Map();
+
+// Fungsi Koordinat Kota
+const getCityCoordinates = (cityName) => {
+  const city = cityName.toLowerCase();
+  
+  const coordinates = {
+    "jakarta": { lat: -6.2088, lng: 106.8456 },
+    "surabaya": { lat: -7.2575, lng: 112.7521 },
+    "bandung": { lat: -6.9175, lng: 107.6191 },
+    "medan": { lat: 3.5952, lng: 98.6722 },
+    "semarang": { lat: -6.9667, lng: 110.4167 },
+    "makassar": { lat: -5.1477, lng: 119.4328 },
+    "palembang": { lat: -2.9909, lng: 104.7567 },
+    "denpasar": { lat: -8.6705, lng: 115.2126 },
+    "malang": { lat: -7.9666, lng: 112.6326 },
+    "yogyakarta": { lat: -7.7955, lng: 110.3695 },
+    "default": { lat: -6.2000, lng: 106.8166 } 
+  };
+
+  // Cek apakah nama kota mengandung key di atas
+  const foundKey = Object.keys(coordinates).find(key => city.includes(key));
+  return foundKey ? coordinates[foundKey] : coordinates["default"];
+};
+
+// Fungsi Simulasi Driver (Statis & Manual Complete oleh Admin)
+const simulateDriverMovement = (orderId, startPos, endPos) => {
+  if (activeDeliveries.has(orderId) && activeDeliveries.get(orderId).interval) {
+    clearInterval(activeDeliveries.get(orderId).interval);
+  }
+
+  const interval = setInterval(() => {
+    
+    const currentPos = {
+      lat: startPos.lat, 
+      lng: startPos.lng, 
+      name: "Driver BookPort",
+      phone: "081234567890",
+      vehicle: "Motor",
+      timestamp: new Date() 
+    };
+
+    // Update data di memori server
+    activeDeliveries.set(orderId, { ...currentPos, interval });
+
+    // Kirim ke Frontend via Socket.io
+    io.emit("driver_position", currentPos);
+
+  }, 5000); 
+};
 
 // ===================================
 // MIDDLEWARE
@@ -453,24 +519,24 @@ app.post("/api/retry-payment", auth, async (req, res) => {
 app.post("/api/checkout", auth, async (req, res) => {
   const { alamat_pengiriman, cart_items, ongkir } = req.body;
   const userId = req.user.id;
-  
+
   if (!cart_items || cart_items.length === 0) {
     return res.status(400).json({ message: "Keranjang Anda kosong" });
   }
-  
+
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction();
-    
+
     // Validasi buku
     const ids = cart_items.map((item) => item.buku_id);
     const [bukuDb] = await connection.query(
       `SELECT id, judul, harga, stok FROM buku WHERE id IN (${ids.join(",")})`
     );
-    
+
     let total_harga = ongkir || 0;
     let detailPesananData = [];
-    
+
     for (const item of cart_items) {
       const buku = bukuDb.find((b) => b.id === item.buku_id);
       if (!buku) {
@@ -488,16 +554,16 @@ app.post("/api/checkout", auth, async (req, res) => {
         jumlah: item.jumlah,
         harga_saat_beli: buku.harga,
       });
-      
+
       // Kurangi stok
       await connection.query("UPDATE buku SET stok = stok - ? WHERE id = ?", [
         item.jumlah,
         item.buku_id,
       ]);
     }
-    
+
     const midtrans_order_id = `BOOKPORT-${userId}-${Date.now()}`;
-    
+
     // Insert pesanan
     const [pesananResult] = await connection.query(
       `INSERT INTO pesanan 
@@ -511,16 +577,16 @@ app.post("/api/checkout", auth, async (req, res) => {
         midtrans_order_id,
       ]
     );
-    
+
     const pesananId = pesananResult.insertId;
-    
+
     // Generate user-friendly order number
-    const order_number = `BP-${String(pesananId).padStart(5, '0')}`;
-    await connection.query(
-      "UPDATE pesanan SET order_number = ? WHERE id = ?",
-      [order_number, pesananId]
-    );
-    
+    const order_number = `BP-${String(pesananId).padStart(5, "0")}`;
+    await connection.query("UPDATE pesanan SET order_number = ? WHERE id = ?", [
+      order_number,
+      pesananId,
+    ]);
+
     // Insert detail pesanan
     for (const detail of detailPesananData) {
       await connection.query(
@@ -555,13 +621,13 @@ app.post("/api/checkout", auth, async (req, res) => {
     };
 
     const snapToken = await snap.createTransactionToken(parameter);
-    
+
     await connection.commit();
-    
+
     res.status(200).json({
       snapToken,
       order_id: midtrans_order_id,
-      order_number: order_number, 
+      order_number: order_number,
       pesanan_id: pesananId,
     });
   } catch (err) {
@@ -585,8 +651,8 @@ app.post("/api/midtrans-notification", async (req, res) => {
   //     : 0;
 
   //   await db.query(
-  //     `INSERT INTO webhook_logs 
-  //       (order_id, transaction_status, fraud_status, payment_type, gross_amount, raw_notification, processed_at) 
+  //     `INSERT INTO webhook_logs
+  //       (order_id, transaction_status, fraud_status, payment_type, gross_amount, raw_notification, processed_at)
   //      VALUES (?, ?, ?, ?, ?, ?, NOW())`,
   //     [
   //       notificationJson.order_id || null,
@@ -606,7 +672,9 @@ app.post("/api/midtrans-notification", async (req, res) => {
   // }
 
   try {
-    const statusResponse = await snap.transaction.notification(notificationJson);
+    const statusResponse = await snap.transaction.notification(
+      notificationJson
+    );
     const order_id = statusResponse.order_id;
     const transaction_status = statusResponse.transaction_status;
     const fraud_status = statusResponse.fraud_status;
@@ -622,7 +690,7 @@ app.post("/api/midtrans-notification", async (req, res) => {
         `${order_id}${status_code}${gross_amount}${process.env.MIDTRANS_SERVER_KEY}`
       )
       .digest("hex");
-    
+
     if (signatureKey !== calculatedSignature) {
       console.error("[WEBHOOK] Invalid signature!");
       return res.status(403).send("Invalid signature");
@@ -638,20 +706,20 @@ app.post("/api/midtrans-notification", async (req, res) => {
 
     // Mapping payment_type ke format yang lebih readable
     const paymentMethodMap = {
-      'credit_card': 'Credit Card',
-      'bank_transfer': 'Bank Transfer',
-      'echannel': 'Mandiri Bill',
-      'bca_va': 'BCA Virtual Account',
-      'bni_va': 'BNI Virtual Account',
-      'bri_va': 'BRI Virtual Account',
-      'permata_va': 'Permata Virtual Account',
-      'other_va': 'Virtual Account',
-      'gopay': 'GoPay',
-      'shopeepay': 'ShopeePay',
-      'qris': 'QRIS',
-      'indomaret': 'Indomaret',
-      'alfamart': 'Alfamart',
-      'akulaku': 'Akulaku',
+      credit_card: "Credit Card",
+      bank_transfer: "Bank Transfer",
+      echannel: "Mandiri Bill",
+      bca_va: "BCA Virtual Account",
+      bni_va: "BNI Virtual Account",
+      bri_va: "BRI Virtual Account",
+      permata_va: "Permata Virtual Account",
+      other_va: "Virtual Account",
+      gopay: "GoPay",
+      shopeepay: "ShopeePay",
+      qris: "QRIS",
+      indomaret: "Indomaret",
+      alfamart: "Alfamart",
+      akulaku: "Akulaku",
     };
 
     const payment_method = paymentMethodMap[payment_type] || payment_type;
@@ -942,7 +1010,7 @@ app.put("/api/admin/pesanan/:id/status", adminAuth, async (req, res) => {
 
   const allowedStatuses = [
     "waiting payment",
-    "processing", 
+    "processing",
     "shipped",
     "completed",
     "cancelled",
@@ -950,7 +1018,8 @@ app.put("/api/admin/pesanan/:id/status", adminAuth, async (req, res) => {
 
   if (!status_pesanan || !allowedStatuses.includes(status_pesanan)) {
     return res.status(400).json({
-      message: "Status tidak valid. Pilih: waiting payment, processing, shipped, completed, cancelled",
+      message:
+        "Status tidak valid. Pilih: waiting payment, processing, shipped, completed, cancelled",
     });
   }
 
@@ -989,7 +1058,7 @@ app.put("/api/admin/pesanan/:id/status", adminAuth, async (req, res) => {
          WHERE d.pesanan_id = ?`,
         [id]
       );
-      
+
       for (const item of details) {
         await db.query("UPDATE buku SET stok = stok + ? WHERE id = ?", [
           item.jumlah,
@@ -1007,10 +1076,12 @@ app.put("/api/admin/pesanan/:id/status", adminAuth, async (req, res) => {
            WHERE id = ?`,
           [status_pesanan, id]
         );
-        
+
         // Log untuk admin bahwa perlu manual refund via Midtrans
-        console.log(`[REFUND NEEDED] Order ${currentOrder.midtrans_order_id} - Rp ${currentOrder.total_harga}`);
-        
+        console.log(
+          `[REFUND NEEDED] Order ${currentOrder.midtrans_order_id} - Rp ${currentOrder.total_harga}`
+        );
+
         const [updatedOrders] = await db.query(
           `SELECT p.*, u.nama AS user_nama, u.email AS user_email
            FROM pesanan p
@@ -1020,10 +1091,11 @@ app.put("/api/admin/pesanan/:id/status", adminAuth, async (req, res) => {
         );
 
         return res.json({
-          message: "Pesanan dibatalkan. Refund perlu diproses manual via Midtrans Dashboard.",
+          message:
+            "Pesanan dibatalkan. Refund perlu diproses manual via Midtrans Dashboard.",
           order: updatedOrders[0],
           refund_required: true,
-          refund_amount: currentOrder.total_harga
+          refund_amount: currentOrder.total_harga,
         });
       }
     }
@@ -1032,6 +1104,50 @@ app.put("/api/admin/pesanan/:id/status", adminAuth, async (req, res) => {
       "UPDATE pesanan SET status_pesanan = ?, updated_at = NOW() WHERE id = ?",
       [status_pesanan, id]
     );
+
+    // Auto-start tracking saat status "shipped"
+    if (status_pesanan === "shipped") {
+      const [orders] = await db.query("SELECT * FROM pesanan WHERE id = ?", [
+        id,
+      ]);
+      if (orders.length > 0) {
+        const order = orders[0];
+
+        let cityName = "default";
+        try {
+          const alamat = JSON.parse(order.alamat_pengiriman);
+          cityName = alamat.city || alamat.province || "default";
+        } catch (e) {
+          cityName = "default";
+        }
+
+        const destination = getCityCoordinates(cityName);
+
+        const driverPosition = {
+          lat: destination.lat - 0.05,
+          lng: destination.lng - 0.05,
+          name: "Driver BookPort",
+          phone: "081234567890",
+          vehicle: "Motor",
+          timestamp: new Date(),
+        };
+
+        activeDeliveries.set(parseInt(id), driverPosition);
+        simulateDriverMovement(parseInt(id), driverPosition, destination);
+
+        console.log(`[TRACKING] Started for order ${id} to ${cityName}`);
+      }
+    }
+
+    // Clear tracking setelah completed
+    if (status_pesanan === "completed" || status_pesanan === "cancelled") {
+      activeDeliveries.delete(parseInt(id));
+      io.to(`order_${id}`).emit("tracking_ended", {
+        orderId: id,
+        status: status_pesanan,
+      });
+      console.log(`[TRACKING] Stopped for order ${id}`);
+    }
 
     const [updatedOrders] = await db.query(
       `SELECT p.*, u.nama AS user_nama, u.email AS user_email
@@ -1051,6 +1167,58 @@ app.put("/api/admin/pesanan/:id/status", adminAuth, async (req, res) => {
   }
 });
 
+app.get("/api/pesanan/:id/tracking", auth, async (req, res) => {
+  try {
+    const [pesanan] = await db.query(
+      "SELECT * FROM pesanan WHERE id = ? AND user_id = ?",
+      [req.params.id, req.user.id]
+    );
+
+    if (pesanan.length === 0) {
+      return res.status(404).json({ message: "Pesanan tidak ditemukan" });
+    }
+
+    const order = pesanan[0];
+
+    if (order.status_pesanan !== "shipped") {
+      return res.json({
+        tracking_available: false,
+        status: order.status_pesanan,
+      });
+    }
+
+    let cityName = "default";
+    try {
+      const alamat = JSON.parse(order.alamat_pengiriman);
+      cityName = alamat.city || alamat.province || "default";
+    } catch (e) {
+      console.log("Failed to parse alamat:", e);
+    }
+
+    const destination = getCityCoordinates(cityName);
+    const driverPosition = activeDeliveries.get(parseInt(req.params.id));
+
+    res.json({
+      tracking_available: true,
+      order_id: order.id,
+      order_number: order.order_number,
+      city: cityName,
+      destination: destination,
+      driver: driverPosition || {
+        lat: destination.lat - 0.05,
+        lng: destination.lng - 0.05,
+        name: "Driver BookPort",
+        phone: "081234567890",
+        vehicle: "Motor",
+      },
+      estimated_arrival: "30-45 menit",
+    });
+  } catch (err) {
+    console.error("Tracking error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 // GET: Revenue statistics (admin)
 app.get("/api/admin/revenue", adminAuth, async (req, res) => {
   try {
@@ -1062,10 +1230,10 @@ app.get("/api/admin/revenue", adminAuth, async (req, res) => {
       WHERE status_pembayaran = 'paid' 
       AND status_pesanan NOT IN ('cancelled')
     `);
-    
+
     res.json({
       total_revenue: result[0].total_revenue || 0,
-      completed_orders: result[0].completed_orders || 0
+      completed_orders: result[0].completed_orders || 0,
     });
   } catch (err) {
     console.error(err);
@@ -1114,39 +1282,48 @@ app.post("/api/admin/retry-blockchain/:id", adminAuth, async (req, res) => {
 app.post("/api/test-midtrans", auth, async (req, res) => {
   try {
     const testOrderId = `TEST-${Date.now()}`;
-    
+
     const parameter = {
       transaction_details: {
         order_id: testOrderId,
-        gross_amount: 100000 // Test dengan nominal fixed
+        gross_amount: 100000, // Test dengan nominal fixed
       },
       customer_details: {
         first_name: "Test User",
         last_name: "BookPort",
         email: "test@bookport.com",
-        phone: "08123456789"
+        phone: "08123456789",
       },
       callbacks: {
-        finish: `${process.env.FRONTEND_URL || "http://localhost:3000"}/riwayat`,
-        unfinish: `${process.env.FRONTEND_URL || "http://localhost:3000"}/checkout`,
-        error: `${process.env.FRONTEND_URL || "http://localhost:3000"}/checkout`,
-      }
+        finish: `${
+          process.env.FRONTEND_URL || "http://localhost:3000"
+        }/riwayat`,
+        unfinish: `${
+          process.env.FRONTEND_URL || "http://localhost:3000"
+        }/checkout`,
+        error: `${
+          process.env.FRONTEND_URL || "http://localhost:3000"
+        }/checkout`,
+      },
     };
 
     console.log("=== MIDTRANS TEST REQUEST ===");
-    console.log("Server Key:", process.env.MIDTRANS_SERVER_KEY?.substring(0, 20) + "...");
+    console.log(
+      "Server Key:",
+      process.env.MIDTRANS_SERVER_KEY?.substring(0, 20) + "..."
+    );
     console.log("Parameter:", JSON.stringify(parameter, null, 2));
     console.log("============================");
 
     const snapToken = await snap.createTransactionToken(parameter);
-    
+
     console.log("SUCCESS - Token:", snapToken.substring(0, 30) + "...");
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       snapToken,
       message: "Midtrans working properly",
-      testOrderId 
+      testOrderId,
     });
   } catch (err) {
     console.error("MIDTRANS TEST FAILED:");
@@ -1155,14 +1332,14 @@ app.post("/api/test-midtrans", auth, async (req, res) => {
     console.error("Status Code:", err.statusCode);
     console.error("API Response:", err.ApiResponse);
     console.error("Full Error:", JSON.stringify(err, null, 2));
-    
-    res.status(500).json({ 
+
+    res.status(500).json({
       success: false,
       error: err.message,
       code: err.code,
       statusCode: err.statusCode,
       apiResponse: err.ApiResponse,
-      hint: "Check console for full error details"
+      hint: "Check console for full error details",
     });
   }
 });
@@ -1215,36 +1392,35 @@ cron.schedule("0 * * * *", async () => {
   }
 });
 
-
 // // SIMULASI AUTO PAY KARENA MIDTRANS ERROR
 // app.post("/api/simulate-payment", auth, async (req, res) => {
 //   const { order_id } = req.body;
-  
+
 //   try {
 //     console.log(`[AUTO-PAY] Simulating success for order: ${order_id}`);
 
 //     // Paksa Update Status di Database menjadi PAID
 //     await db.query(
-//       `UPDATE pesanan 
-//        SET status_pembayaran = 'paid', 
-//            status_pesanan = 'processing', 
-//            updated_at = NOW() 
+//       `UPDATE pesanan
+//        SET status_pembayaran = 'paid',
+//            status_pesanan = 'processing',
+//            updated_at = NOW()
 //        WHERE midtrans_order_id = ?`,
 //       [order_id]
 //     );
 
 //     // Logika tambahan: Kurangi Stok & Catat Blockchain (Manual karena tidak lewat webhook)
 //     const [pesanan] = await db.query(
-//         "SELECT id, user_id, total_harga FROM pesanan WHERE midtrans_order_id = ?", 
+//         "SELECT id, user_id, total_harga FROM pesanan WHERE midtrans_order_id = ?",
 //         [order_id]
 //     );
 
 //     if (pesanan.length > 0) {
 //         const p = pesanan[0];
-        
+
 //         // a. Kurangi Stok Buku
 //         const [details] = await db.query(
-//             "SELECT buku_id, jumlah FROM detail_pesanan WHERE pesanan_id = ?", 
+//             "SELECT buku_id, jumlah FROM detail_pesanan WHERE pesanan_id = ?",
 //             [p.id]
 //         );
 //         for (const item of details) {
@@ -1271,8 +1447,9 @@ cron.schedule("0 * * * *", async () => {
 // ===================================
 // START SERVER
 // ===================================
-app.listen(port, () => {
+server.listen(port, () => {
   console.log(`Server berjalan di http://localhost:${port}`);
+  console.log(`Socket.IO tracking enabled`);
   console.log(`Database: ${process.env.DB_NAME || "bookport_db"}`);
   console.log(
     `JWT Secret: ${process.env.JWT_SECRET ? "✓ Configured" : "✗ Missing"}`

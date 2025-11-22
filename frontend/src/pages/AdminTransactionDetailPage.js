@@ -352,7 +352,7 @@ const AdminTransactionDetailPage = () => {
                   fontSize: "14px",
                 }}
               >
-                View on Etherscan →
+                View on Etherscan
               </a>
             </div>
           )}

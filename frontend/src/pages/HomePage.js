@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useContext } from "react";
 import axios from "axios";
+import api from '../api';
 import Footer from "../components/Footer";
 import { Link } from "react-router-dom";
 import CartContext from "../context/CartContext";

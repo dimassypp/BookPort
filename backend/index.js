@@ -110,7 +110,6 @@ const simulateDriverMovement = (orderId, startPos, endPos) => {
 // ===================================
 // MIDDLEWARE
 // ===================================
-app.use(cors());
 app.use(express.json());
 
 // Setup upload directory

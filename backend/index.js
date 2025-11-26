@@ -19,11 +19,19 @@ const socketIo = require("socket.io");
 // INISIALISASI APLIKASI
 // ===================================
 const app = express();
+const allowedOrigin = process.env.FRONTEND_URL || "*"; 
+app.use(cors({
+    origin: allowedOrigin,
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true
+}));
+
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: "*",
+    origin: allowedOrigin,
     methods: ["GET", "POST"],
+    credentials: true
   },
 });
 

@@ -18,7 +18,7 @@ const HomePage = () => {
   useEffect(() => {
     const fetchBuku = async () => {
       try {
-        const response = await axios.get("http://localhost:5000/api/buku");
+        const response = await api.get('/api/buku');
         // Filter buku yang stoknya > 0 hanya di HomePage
         const bukuTersedia = response.data.filter((buku) => buku.stok > 0);
         setBukuList(bukuTersedia);

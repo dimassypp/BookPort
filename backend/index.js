@@ -21,9 +21,9 @@ const socketIo = require("socket.io");
 const app = express();
 const allowedOrigin = process.env.FRONTEND_URL || "*"; 
 app.use(cors({
-    origin: allowedOrigin,
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    credentials: true
+    origin: process.env.FRONTEND_URL, 
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE"]
 }));
 
 const server = http.createServer(app);
